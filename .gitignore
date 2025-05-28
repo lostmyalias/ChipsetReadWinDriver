@@ -1,0 +1,13 @@
+# Visual Studio cruft
+.vs/
+*.user
+*.suo
+*.vcxproj.user
+*.vscode/
+
+# Build artifacts
+bin/
+obj/
+*.log
+*.cache
+*.pdb

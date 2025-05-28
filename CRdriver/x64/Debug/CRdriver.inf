@@ -1,0 +1,64 @@
+﻿; ──────────────────────────────────────────────────────────────────────────────
+; CRdriver.inf – root-enumerated KMDF driver, Windows 10 1709 (16299) +
+; Save as **UTF-16 LE** or ANSI.  Tested with VS 2022 17.10 + WDK 10.0.26100.
+; ──────────────────────────────────────────────────────────────────────────────
+
+[Version]
+Signature       = "$WINDOWS NT$"
+Class           = System
+ClassGuid       = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider        = %ManufacturerName%
+CatalogFile     = CRdriver.cat
+DriverVer = 05/28/2025,11.0.1.988
+PnpLockdown     = 1                     
+
+;──────────────── Target OS – Win10 1709 (16299) and later ────────────────
+[Manufacturer]
+%ManufacturerName% = Models,NTamd64.10.0...16299
+
+[Models.NTamd64.10.0...16299]
+%CRdriver.DeviceDesc% = Install, Root\CRdriver     ; root-enumerated HW-ID
+
+;──────────────── Install (DDInstall) section ──────────────────────────────
+[Install]                                   ; generic name keeps paths short
+CopyFiles   = Driver.Copy
+
+[Install.Services]
+AddService  = CRdriver, %SPSVCINST_ASSOCSERVICE%, Service
+
+[Install.Wdf]
+KmdfService = CRdriver, WdfSect
+
+;──────────────── File payload & dirs ──────────────────────────────────────
+[DestinationDirs]
+Driver.Copy = 13                           ; Driver Store (requires 16299+)
+
+[Driver.Copy]
+CRdriver.sys
+
+;──────────────── Service definition ───────────────────────────────────────
+[Service]
+DisplayName   = %CRdriver.SVCDESC%
+ServiceType   = 1                          ; SERVICE_KERNEL_DRIVER
+StartType     = 3                          ; DEMAND_START
+ErrorControl  = 1                          ; NORMAL
+ServiceBinary = %13%\CRdriver.sys
+
+;──────────────── KMDF version linkage ─────────────────────────────────────
+[WdfSect]
+KmdfLibraryVersion = 1.15
+
+;──────────────── Legacy disk layout stubs (still required) ────────────────
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+CRdriver.sys = 1,,
+
+;──────────────── Localisable strings ──────────────────────────────────────
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ManufacturerName       = "My Test Drivers"
+DiskName               = "CRdriver Installation Disk"
+CRdriver.DeviceDesc    = "CRdriver Device"
+CRdriver.SVCDESC       = "CRdriver PCI Scanner Service"
