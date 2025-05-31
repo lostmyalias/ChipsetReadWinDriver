@@ -1,20 +1,11 @@
 // driver.h
-
 #pragma once
-
 #include <ntddk.h>
 #include <wdf.h>
 #include <initguid.h>
-#include <devioctl.h>
+#include <devioctl.h> // For CTL_CODE
 
-// ... (Forward declarations) ...
-DRIVER_INITIALIZE DriverEntry;
-EVT_WDF_DRIVER_DEVICE_ADD EvtDriverDeviceAdd;
-EVT_WDF_DRIVER_UNLOAD EvtDriverUnload;
-EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL EvtIoDeviceControl;
-NTSTATUS MyPciScannerScanBus0AndPrint(WDFDEVICE Device);
-
-// --- Custom IOCTL Definition ---
+// IOCTL Definition
 #define MYPCISCANNER_DEVICE_TYPE 0x8000
 #define IOCTL_MYPCISCANNER_SCAN_BUS0 CTL_CODE( \
     MYPCISCANNER_DEVICE_TYPE, \
@@ -23,14 +14,17 @@ NTSTATUS MyPciScannerScanBus0AndPrint(WDFDEVICE Device);
     FILE_ANY_ACCESS \
 )
 
-// --- PCI Vendor IDs ---
+// PCI Vendor IDs
 #define PCI_VENDOR_ID_INTEL 0x8086
 #define PCI_VENDOR_ID_AMD   0x1022
-// AMD also acquired ATI, whose vendor ID is 0x1002. 
-// You might want to include this if looking for AMD graphics or older chipsets.
 #define PCI_VENDOR_ID_ATI_AMD 0x1002 
+#define PCI_MAX_DEVICES       32
+#define PCI_MAX_FUNCTIONS     8
+#define PCI_INVALID_VENDORID  0xFFFF
 
-// Standard PCI definitions (often available via ntddk.h or wdm.h but good to be aware of)
-#define PCI_MAX_DEVICES                     32
-#define PCI_MAX_FUNCTIONS                   8
-#define PCI_INVALID_VENDORID                0xFFFF
+// Forward declarations
+DRIVER_INITIALIZE DriverEntry;
+EVT_WDF_DRIVER_DEVICE_ADD EvtDriverDeviceAdd;
+EVT_WDF_DRIVER_UNLOAD EvtDriverUnload;
+EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL EvtIoDeviceControl;
+NTSTATUS MyPciScannerScanBus0AndPrint(WDFDEVICE Device);
