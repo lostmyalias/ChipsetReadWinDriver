@@ -1,62 +1,48 @@
-# Visual Studio cruft
+# Visual Studio caches
 .vs/
-*.user
 *.suo
-*.vcxproj.user
-*.vscode/
-
-# Build artifacts
-bin/
-obj/
-*.log
-*.cache
-*.pdb# ─── Visual Studio / JetBrains ───────────────────────────────────────────
-.vs/
-.idea/
 *.user
-*.suo
 *.vcxproj.user
 *.VC.db
 *.VC.VC.opendb
-*.etag
-ipch/
-.vscode/
 
-# ─── Build artifacts ─────────────────────────────────────────────────────
-bin/
-obj/
+# Build artifacts
 [Bb]uild*/
-Debug*/
-Release*/
+*/obj/
+*/bin/
 *.log
 *.cache
 *.lastbuildstate
-*.ilk
 *.tlog/
-*.dmp
-
-# ─── Driver output ───────────────────────────────────────────────────────
+*.ilk
 *.pdb
 *.sys
 *.cat
 *.cab
 *.msi
 
-# ─── Auth / Signing ──────────────────────────────────────────────────────
+# CRdriver outputs
+CRdriver/*/Debug*/
+CRdriver/*/Release*/
+
+# CRconsole outputs
+CRconsole/*/Debug*/
+CRconsole/*/Release*/
+
+# Signing files
 *.pfx
 *.pvk
 *.snk
 *.cer
 
-# ─── NuGet / Package manager ─────────────────────────────────────────────
+# NuGet / package manager
 packages/
 *.nupkg
 *.nuspec
 *.psmdcp
 *.vshost.*
-project.lock.json
 
-# ─── Misc. ───────────────────────────────────────────────────────────────
+# Misc
 *.orig
 *.htm
 *.tmp
@@ -64,4 +50,3 @@ project.lock.json
 *.swp
 *.DS_Store
 Thumbs.db
-
