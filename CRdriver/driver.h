@@ -1,5 +1,7 @@
 // driver.h
+
 #pragma once
+
 #include <ntddk.h>
 #include <wdf.h>
 #include <initguid.h>
@@ -21,6 +23,14 @@
 #define PCI_MAX_DEVICES       32
 #define PCI_MAX_FUNCTIONS     8
 #define PCI_INVALID_VENDORID  0xFFFF
+
+// NEW: Define a context structure for the WDFDRIVER object
+typedef struct _DRIVER_CONTEXT {
+    WDFDEVICE ControlDevice; // To store the handle of our control device
+} DRIVER_CONTEXT, * PDRIVER_CONTEXT;
+
+// NEW: Declare an accessor function for the driver context
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DRIVER_CONTEXT, WdfGetDriverContext)
 
 // Forward declarations
 DRIVER_INITIALIZE DriverEntry;

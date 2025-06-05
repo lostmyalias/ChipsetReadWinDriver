@@ -18,34 +18,34 @@ DriverEntry(
 {
     NTSTATUS status;
     WDF_DRIVER_CONFIG config;
-    WDFDRIVER hDriver; // Handle to the WDFDRIVER object
+    WDFDRIVER hDriver;
+    PWDFDEVICE_INIT pDeviceInit = NULL;
+    WDFDEVICE hControlDevice = NULL;    // Local handle for creation
+    PDRIVER_CONTEXT driverContext = NULL; // Pointer to our driver context
 
-    PWDFDEVICE_INIT pDeviceInit = NULL; // Pointer to device initialization structure
-    WDFDEVICE hControlDevice = NULL;    // Handle to our control device
+    WDF_OBJECT_ATTRIBUTES driverAttributes; // For driver context
 
-    // Strings for our device name, SDDL, and symbolic link
     DECLARE_CONST_UNICODE_STRING(ntDeviceName, L"\\Device\\MyPciScanner");
-    DECLARE_CONST_UNICODE_STRING(sddlString, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;BU)"); // System, Admin, Authenticated Users
+    DECLARE_CONST_UNICODE_STRING(sddlString, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;BU)");
     DECLARE_CONST_UNICODE_STRING(symbolicLinkName, L"\\DosDevices\\MyPciScanner");
-
-    WDF_IO_QUEUE_CONFIG ioQueueConfig; // Structure for configuring the I/O queue
-    WDFQUEUE hQueue;                   // Handle to the created I/O queue
+    WDF_IO_QUEUE_CONFIG ioQueueConfig;
+    WDFQUEUE hQueue;
 
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: DriverEntry - IN\n"));
 
-    // Initialize driver config structure, specifying EvtDriverUnload
-    // EvtDriverDeviceAdd is still required by WDF_DRIVER_CONFIG_INIT,
-    // but it will be a minimal stub as PnP won't use it to create our control device.
     WDF_DRIVER_CONFIG_INIT(&config, EvtDriverDeviceAdd);
     config.EvtDriverUnload = EvtDriverUnload;
 
-    // Create the WDFDRIVER object
+    // NEW: Initialize attributes for the WDFDRIVER object to specify our context type
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&driverAttributes, DRIVER_CONTEXT);
+
+    // Create the WDFDRIVER object, now with context attributes
     status = WdfDriverCreate(
         DriverObject,
         RegistryPath,
-        WDF_NO_OBJECT_ATTRIBUTES, // Optional driver attributes
-        &config,                  // Driver Config Info
-        &hDriver                  // Store the WDFDRIVER handle
+        &driverAttributes, // Pass attributes for context
+        &config,
+        &hDriver
     );
 
     if (!NT_SUCCESS(status)) {
@@ -54,75 +54,63 @@ DriverEntry(
     }
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: WDFDRIVER created successfully.\n"));
 
+    // NEW: Get our driver context
+    driverContext = WdfGetDriverContext(hDriver);
+    driverContext->ControlDevice = NULL; // Initialize the handle in context
+
     // ---- Create Control Device Object directly in DriverEntry ----
-
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: Allocating DeviceInit for Control Device...\n"));
-    // For a control device, we allocate a WDFDEVICE_INIT structure.
-    // WdfControlDeviceInitAllocate takes the WDFDRIVER handle.
-    pDeviceInit = WdfControlDeviceInitAllocate(
-        hDriver, // Use the WDFDRIVER handle we just got
-        &sddlString
-    );
-
+    pDeviceInit = WdfControlDeviceInitAllocate(hDriver, &sddlString);
     if (pDeviceInit == NULL) {
         status = STATUS_INSUFFICIENT_RESOURCES;
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: WdfControlDeviceInitAllocate failed %!STATUS!\n", status));
-        // No WDF objects to cleanup here other than WDFDRIVER which framework handles on DriverEntry failure.
+        // WdfDriverCreate succeeded, but this part failed. WDF will call EvtDriverUnload
+        // for the WDFDRIVER if DriverEntry returns an error after WdfDriverCreate success.
         return status;
     }
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: DeviceInit allocated.\n"));
 
-    // Assign a name to the device object.
     status = WdfDeviceInitAssignName(pDeviceInit, &ntDeviceName);
     if (!NT_SUCCESS(status)) {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: WdfDeviceInitAssignName failed %!STATUS!\n", status));
-        WdfDeviceInitFree(pDeviceInit); // Free the allocated pDeviceInit
+        WdfDeviceInitFree(pDeviceInit);
         return status;
     }
 
-    // Set device characteristics (optional but good practice for control devices)
     WdfDeviceInitSetCharacteristics(pDeviceInit, FILE_DEVICE_SECURE_OPEN, TRUE);
-    WdfDeviceInitSetDeviceType(pDeviceInit, FILE_DEVICE_UNKNOWN); // Common for control devices
+    WdfDeviceInitSetDeviceType(pDeviceInit, FILE_DEVICE_UNKNOWN);
 
-    // Create the WDFDEVICE object for our control device.
     status = WdfDeviceCreate(&pDeviceInit, WDF_NO_OBJECT_ATTRIBUTES, &hControlDevice);
     if (!NT_SUCCESS(status)) {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: WdfDeviceCreate for control device failed %!STATUS!\n", status));
-        // pDeviceInit is freed by WdfDeviceCreate on failure if it was successfully used by it.
-        // If WdfDeviceCreate itself fails before consuming pDeviceInit, pDeviceInit might still need freeing.
-        // However, WDF framework typically handles pDeviceInit if WdfDeviceCreate is called with it.
-        // For safety, if WdfDeviceCreate fails, pDeviceInit is usually considered consumed or invalid.
+        // pDeviceInit is consumed by WdfDeviceCreate, successful or not, if pDeviceInit was valid.
         return status;
     }
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: Control Device %wZ created successfully.\n", &ntDeviceName));
 
-    // Create the symbolic link for user-mode access.
+    // NEW: Store the control device handle in our driver context
+    driverContext->ControlDevice = hControlDevice;
+
     status = WdfDeviceCreateSymbolicLink(hControlDevice, &symbolicLinkName);
     if (!NT_SUCCESS(status)) {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: WdfDeviceCreateSymbolicLink failed %!STATUS!\n", status));
-        WdfObjectDelete(hControlDevice); // Clean up the created WDFDEVICE
+        // If symlink fails, the control device still exists. It will be deleted by EvtDriverUnload.
+        // No, if a step after WdfDeviceCreate fails, we should clean up hControlDevice here too,
+        // or ensure EvtDriverUnload handles it if DriverEntry returns error.
+        // For now, let EvtDriverUnload handle it. If DriverEntry returns an error after WdfDeviceCreate,
+        // WDF will call EvtDriverUnload.
         return status;
     }
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: Symbolic link %wZ created successfully.\n", &symbolicLinkName));
 
-    // Configure and create a default I/O queue for the control device.
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: Configuring I/O Queue for Control Device...\n"));
-    WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(
-        &ioQueueConfig,
-        WdfIoQueueDispatchSequential
-    );
-    ioQueueConfig.EvtIoDeviceControl = EvtIoDeviceControl; // Your existing callback
+    WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&ioQueueConfig, WdfIoQueueDispatchSequential);
+    ioQueueConfig.EvtIoDeviceControl = EvtIoDeviceControl;
 
-    status = WdfIoQueueCreate(
-        hControlDevice,
-        &ioQueueConfig,
-        WDF_NO_OBJECT_ATTRIBUTES,
-        &hQueue // Store queue handle if needed, or WDF_NO_HANDLE
-    );
+    status = WdfIoQueueCreate(hControlDevice, &ioQueueConfig, WDF_NO_OBJECT_ATTRIBUTES, &hQueue);
     if (!NT_SUCCESS(status)) {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: WdfIoQueueCreate failed %!STATUS!\n", status));
-        // Symbolic link is cleaned up when hControlDevice is deleted.
-        WdfObjectDelete(hControlDevice); // This will also delete associated symbolic link and default queue.
+        // Let EvtDriverUnload handle deleting hControlDevice.
         return status;
     }
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: I/O Queue created successfully.\n"));
@@ -131,7 +119,7 @@ DriverEntry(
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: Control device initialization finished.\n"));
 
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: DriverEntry - Control Device Setup Complete - OUT\n"));
-    return status; // STATUS_SUCCESS from WdfDriverCreate if everything else succeeded
+    return STATUS_SUCCESS; // Explicitly return STATUS_SUCCESS
 }
 
 NTSTATUS
@@ -329,13 +317,26 @@ EvtDriverUnload(
     _In_ WDFDRIVER Driver
 )
 {
-    UNREFERENCED_PARAMETER(Driver);
+    PDRIVER_CONTEXT driverContext = NULL;
+
+    PAGED_CODE(); // EvtDriverUnload is called at IRQL = PASSIVE_LEVEL
+
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtDriverUnload - IN\n"));
 
-    // If you initialized WPP Tracing, you would clean it up here:
-    // PDRIVER_OBJECT driverObject = WdfDriverWdmGetDriverObject(Driver);
-    // WPP_CLEANUP(driverObject);
+    driverContext = WdfGetDriverContext(Driver);
+
+    if (driverContext != NULL && driverContext->ControlDevice != NULL) {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtDriverUnload - Explicitly deleting control device (Handle: %p).\n", driverContext->ControlDevice));
+        WdfObjectDelete(driverContext->ControlDevice);
+        driverContext->ControlDevice = NULL; // Good practice to NULL the handle after deleting
+    }
+    else {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: EvtDriverUnload - ControlDevice handle in context is NULL or context itself is NULL.\n"));
+    }
+
+    // WDF will automatically clean up the WDFDRIVER object itself after this function returns.
+    // No need to call WdfObjectDelete(Driver);
 
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtDriverUnload - OUT\n"));
-    return;
+    // No explicit return needed for VOID function
 }
