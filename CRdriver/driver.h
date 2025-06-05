@@ -34,7 +34,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DRIVER_CONTEXT, WdfGetDriverContext)
 
 // Forward declarations
 DRIVER_INITIALIZE DriverEntry;
-EVT_WDF_DRIVER_DEVICE_ADD EvtDriverDeviceAdd;
+// EVT_WDF_DRIVER_DEVICE_ADD EvtDriverDeviceAdd;
 EVT_WDF_DRIVER_UNLOAD EvtDriverUnload;
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL EvtIoDeviceControl;
 NTSTATUS MyPciScannerScanBus0AndPrint(WDFDEVICE Device);
