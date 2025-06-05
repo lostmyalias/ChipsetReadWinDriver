@@ -2,13 +2,14 @@
 
 #include <ntddk.h>
 #include <wdf.h>
-#include "driver.h"
+#include "driver.h" // Ensure this has your DRIVER_CONTEXT, IOCTLs, and all forward declarations
 
-// Forward declaration for our EvtDriverDeviceAdd callback
+// Forward declarations (must match driver.h)
 DRIVER_INITIALIZE DriverEntry;
 EVT_WDF_DRIVER_DEVICE_ADD EvtDriverDeviceAdd;
 EVT_WDF_DRIVER_UNLOAD EvtDriverUnload;
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL EvtIoDeviceControl;
+NTSTATUS MyPciScannerScanBus0AndPrint(WDFDEVICE Device);
 
 NTSTATUS
 DriverEntry(
@@ -20,30 +21,29 @@ DriverEntry(
     WDF_DRIVER_CONFIG config;
     WDFDRIVER hDriver;
     PWDFDEVICE_INIT pDeviceInit = NULL;
-    WDFDEVICE hControlDevice = NULL;    // Local handle for creation
-    PDRIVER_CONTEXT driverContext = NULL; // Pointer to our driver context
-
-    WDF_OBJECT_ATTRIBUTES driverAttributes; // For driver context
+    WDFDEVICE hControlDevice = NULL;    // Handle for the created control device
+    PDRIVER_CONTEXT driverContext = NULL;
+    WDF_OBJECT_ATTRIBUTES driverAttributes;
+    WDF_DEVICE_PNP_CAPABILITIES pnpCaps;
 
     DECLARE_CONST_UNICODE_STRING(ntDeviceName, L"\\Device\\MyPciScanner");
     DECLARE_CONST_UNICODE_STRING(sddlString, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;BU)");
     DECLARE_CONST_UNICODE_STRING(symbolicLinkName, L"\\DosDevices\\MyPciScanner");
     WDF_IO_QUEUE_CONFIG ioQueueConfig;
-    WDFQUEUE hQueue;
+    WDFQUEUE hQueue = NULL; // Initialize to NULL
 
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: DriverEntry - IN\n"));
 
     WDF_DRIVER_CONFIG_INIT(&config, EvtDriverDeviceAdd);
     config.EvtDriverUnload = EvtDriverUnload;
+    config.DriverInitFlags = WdfDriverInitNonPnpDriver; // Mark as Non-PnP
 
-    // NEW: Initialize attributes for the WDFDRIVER object to specify our context type
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&driverAttributes, DRIVER_CONTEXT);
 
-    // Create the WDFDRIVER object, now with context attributes
     status = WdfDriverCreate(
         DriverObject,
         RegistryPath,
-        &driverAttributes, // Pass attributes for context
+        &driverAttributes,
         &config,
         &hDriver
     );
@@ -54,18 +54,16 @@ DriverEntry(
     }
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: WDFDRIVER created successfully.\n"));
 
-    // NEW: Get our driver context
     driverContext = WdfGetDriverContext(hDriver);
-    driverContext->ControlDevice = NULL; // Initialize the handle in context
+    driverContext->ControlDevice = NULL;
 
-    // ---- Create Control Device Object directly in DriverEntry ----
+    // ---- Create Control Device Object ----
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: Allocating DeviceInit for Control Device...\n"));
     pDeviceInit = WdfControlDeviceInitAllocate(hDriver, &sddlString);
     if (pDeviceInit == NULL) {
         status = STATUS_INSUFFICIENT_RESOURCES;
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: WdfControlDeviceInitAllocate failed %!STATUS!\n", status));
-        // WdfDriverCreate succeeded, but this part failed. WDF will call EvtDriverUnload
-        // for the WDFDRIVER if DriverEntry returns an error after WdfDriverCreate success.
+        // WDFDRIVER created, so EvtDriverUnload will be called by WDF if DriverEntry returns error
         return status;
     }
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: DeviceInit allocated.\n"));
@@ -74,8 +72,13 @@ DriverEntry(
     if (!NT_SUCCESS(status)) {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: WdfDeviceInitAssignName failed %!STATUS!\n", status));
         WdfDeviceInitFree(pDeviceInit);
+        pDeviceInit = NULL; // Good practice after freeing
         return status;
     }
+
+    WDF_DEVICE_PNP_CAPABILITIES_INIT(&pnpCaps);
+    pnpCaps.Removable = WdfTrue;
+    WdfDeviceSetPnpCapabilities(pDeviceInit, &pnpCaps);
 
     WdfDeviceInitSetCharacteristics(pDeviceInit, FILE_DEVICE_SECURE_OPEN, TRUE);
     WdfDeviceInitSetDeviceType(pDeviceInit, FILE_DEVICE_UNKNOWN);
@@ -83,22 +86,18 @@ DriverEntry(
     status = WdfDeviceCreate(&pDeviceInit, WDF_NO_OBJECT_ATTRIBUTES, &hControlDevice);
     if (!NT_SUCCESS(status)) {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: WdfDeviceCreate for control device failed %!STATUS!\n", status));
-        // pDeviceInit is consumed by WdfDeviceCreate, successful or not, if pDeviceInit was valid.
+        // pDeviceInit is consumed by WdfDeviceCreate, successful or not, if pDeviceInit was valid going in.
+        // No need to free pDeviceInit here. WDF handles it.
         return status;
     }
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: Control Device %wZ created successfully.\n", &ntDeviceName));
 
-    // NEW: Store the control device handle in our driver context
     driverContext->ControlDevice = hControlDevice;
 
-    status = WdfDeviceCreateSymbolicLink(hControlDevice, &symbolicLinkName);
+    status = WdfDeviceCreateSymbolicLink(hControlDevice, &symbolicLinkName); // USE hControlDevice
     if (!NT_SUCCESS(status)) {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: WdfDeviceCreateSymbolicLink failed %!STATUS!\n", status));
-        // If symlink fails, the control device still exists. It will be deleted by EvtDriverUnload.
-        // No, if a step after WdfDeviceCreate fails, we should clean up hControlDevice here too,
-        // or ensure EvtDriverUnload handles it if DriverEntry returns error.
-        // For now, let EvtDriverUnload handle it. If DriverEntry returns an error after WdfDeviceCreate,
-        // WDF will call EvtDriverUnload.
+        // EvtDriverUnload will clean up hControlDevice from context
         return status;
     }
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: Symbolic link %wZ created successfully.\n", &symbolicLinkName));
@@ -107,47 +106,57 @@ DriverEntry(
     WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&ioQueueConfig, WdfIoQueueDispatchSequential);
     ioQueueConfig.EvtIoDeviceControl = EvtIoDeviceControl;
 
-    status = WdfIoQueueCreate(hControlDevice, &ioQueueConfig, WDF_NO_OBJECT_ATTRIBUTES, &hQueue);
+    status = WdfIoQueueCreate(hControlDevice, &ioQueueConfig, WDF_NO_OBJECT_ATTRIBUTES, &hQueue); // USE hControlDevice
     if (!NT_SUCCESS(status)) {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: WdfIoQueueCreate failed %!STATUS!\n", status));
-        // Let EvtDriverUnload handle deleting hControlDevice.
+        // EvtDriverUnload will clean up hControlDevice from context
         return status;
     }
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: I/O Queue created successfully.\n"));
 
-    WdfControlFinishInitializing(hControlDevice);
+    WdfControlFinishInitializing(hControlDevice); // USE hControlDevice
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: Control device initialization finished.\n"));
 
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: DriverEntry - Control Device Setup Complete - OUT\n"));
-    return STATUS_SUCCESS; // Explicitly return STATUS_SUCCESS
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
-EvtDriverDeviceAdd(
+EvtDriverDeviceAdd( // Minimal stub
     _In_ WDFDRIVER       Driver,
     _Inout_ PWDFDEVICE_INIT DeviceInit
 )
 {
-    // This driver creates its control device in DriverEntry.
-    // EvtDriverDeviceAdd is provided to satisfy WDF_DRIVER_CONFIG_INIT requirements
-    // but is not expected to be called for creating our primary control device
-    // with the DefaultInstall INF approach.
-    // If it were called for some other unexpected PnP device, 
-    // we simply do nothing and return success or an appropriate status.
-
     UNREFERENCED_PARAMETER(Driver);
     UNREFERENCED_PARAMETER(DeviceInit);
-
-    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtDriverDeviceAdd - Called (unexpectedly for control device creation path)\n"));
-
-    // Returning STATUS_SUCCESS means we "handled" it, but created no device.
-    // Returning STATUS_NOT_SUPPORTED might also be appropriate if this driver
-    // strictly should not handle any PnP devices.
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtDriverDeviceAdd - Called (should be unexpected for this driver configuration)\n"));
     return STATUS_SUCCESS;
 }
 
 VOID
-EvtIoDeviceControl(
+EvtDriverUnload( // With context cleanup
+    _In_ WDFDRIVER Driver
+)
+{
+    PDRIVER_CONTEXT driverContext = NULL;
+    PAGED_CODE();
+
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtDriverUnload - IN\n"));
+    driverContext = WdfGetDriverContext(Driver);
+
+    if (driverContext != NULL && driverContext->ControlDevice != NULL) {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtDriverUnload - Explicitly deleting control device (Handle: %p).\n", driverContext->ControlDevice));
+        WdfObjectDelete(driverContext->ControlDevice);
+        driverContext->ControlDevice = NULL;
+    }
+    else {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtDriverUnload - No control device handle in context or context is NULL.\n"));
+    }
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtDriverUnload - OUT\n"));
+}
+
+VOID
+EvtIoDeviceControl( // Should be unchanged
     _In_ WDFQUEUE   Queue,
     _In_ WDFREQUEST Request,
     _In_ size_t     OutputBufferLength,
@@ -156,7 +165,7 @@ EvtIoDeviceControl(
 )
 {
     NTSTATUS status = STATUS_SUCCESS;
-    WDFDEVICE device = WdfIoQueueGetDevice(Queue); // Get the WDFDEVICE from the queue
+    WDFDEVICE device = WdfIoQueueGetDevice(Queue);
 
     UNREFERENCED_PARAMETER(OutputBufferLength);
     UNREFERENCED_PARAMETER(InputBufferLength);
@@ -169,14 +178,10 @@ EvtIoDeviceControl(
     case IOCTL_MYPCISCANNER_SCAN_BUS0:
     {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: IOCTL_MYPCISCANNER_SCAN_BUS0 received!\n"));
-
-        // Call our PCI scanning function
-        status = MyPciScannerScanBus0AndPrint(device); // Pass the WDFDEVICE along
-
-        WdfRequestCompleteWithInformation(Request, status, 0); // BytesWritten = 0
+        status = MyPciScannerScanBus0AndPrint(device);
+        WdfRequestCompleteWithInformation(Request, status, 0);
         break;
     }
-
     default:
     {
         KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: Received unknown IOCTL code 0x%X\n", IoControlCode));
@@ -185,105 +190,58 @@ EvtIoDeviceControl(
         break;
     }
     }
-
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtIoDeviceControl - OUT (request completed with %!STATUS!)\n", status));
 }
 
 NTSTATUS
-MyPciScannerScanBus0AndPrint(
+MyPciScannerScanBus0AndPrint( // Should be unchanged
     _In_ WDFDEVICE Device
 )
 {
     NTSTATUS status = STATUS_SUCCESS;
-    PCI_COMMON_CONFIG pciConfig; // Structure to hold PCI configuration data
-    ULONG busNumber = 0;         // We are scanning bus 0
+    PCI_COMMON_CONFIG pciConfig;
+    ULONG busNumber = 0;
     ULONG deviceNumber;
     ULONG functionNumber;
-    ULONG bytesRead; // To store how many bytes GetBusData read
+    ULONG bytesRead = 0;
 
     UNREFERENCED_PARAMETER(Device);
 
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: MyPciScannerScanBus0AndPrint - IN\n"));
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: Starting scan of PCI Bus %d\n", busNumber));
 
-    //
-    // TODO LATER: Obtain BUS_INTERFACE_STANDARD here.
-    // For now, the GetBusData call below will be a conceptual placeholder.
-    // Example:
-    // BUS_INTERFACE_STANDARD PciBusInterface;
-    // status = GetPciBusInterface(Device, &PciBusInterface); // A function we'd have to write
-    // if (!NT_SUCCESS(status)) {
-    //     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: Failed to get PCI bus interface: %!STATUS!\n", status));
-    //     return status;
-    // }
-    //
-
     for (deviceNumber = 0; deviceNumber < PCI_MAX_DEVICES; deviceNumber++)
     {
         for (functionNumber = 0; functionNumber < PCI_MAX_FUNCTIONS; functionNumber++)
         {
-            // Initialize pciConfig for safety, especially VendorID to check if a device exists
             RtlZeroMemory(&pciConfig, sizeof(PCI_COMMON_CONFIG));
-            pciConfig.VendorID = PCI_INVALID_VENDORID; // Assume no device initially
+            pciConfig.VendorID = PCI_INVALID_VENDORID;
+            bytesRead = 0;
 
-            // --- Placeholder for GetBusData ---
-            // This is where we would call the GetBusData function from the BUS_INTERFACE_STANDARD
-            // to read the PCI configuration header for the current bus, device, and function.
-            //
-            // Conceptual call (cannot be compiled directly without the interface):
-            // bytesRead = PciBusInterface.GetBusData(
-            // PciBusInterface.Context, // Context from the interface
-            // PCI_WHICHSPACE_CONFIG, // Indicate we're reading PCI config space
-            // &pciConfig,            // Buffer to store the data
-            // 0,                     // Offset in config space (0 for header)
-            // sizeof(PCI_COMMON_CONFIG) // Number of bytes to read
-            // );
-            //
-            // if (bytesRead == 0 || bytesRead == PCI_INVALID_VENDORID) { // Or other ways to check if read failed for non-existent device
-            //    // No device at this slot/function, or error reading
-            //    if (functionNumber == 0) break; // Optimization: if func 0 doesn't exist, higher funcs likely won't either for this device
-            //    continue;
-            // }
-            //
-            // --- End Placeholder for GetBusData ---
-
-             // ** SIMULATION / TESTING HOOK (Remove after GetBusData is implemented) **
-            // To test the logic without actual hardware reads yet, you could manually fill pciConfig
-            // for a known device, e.g., if you know you have an Intel device at 0:2:0
+            // ** SIMULATION / TESTING HOOK **
             if (busNumber == 0 && deviceNumber == 2 && functionNumber == 0) {
                 pciConfig.VendorID = PCI_VENDOR_ID_INTEL;
-                pciConfig.DeviceID = 0x1234; // Example Device ID
-                pciConfig.HeaderType = 0x00; // Simulate Type 0, single function for simplicity
+                pciConfig.DeviceID = 0x1234;
+                pciConfig.HeaderType = 0x00;
                 KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: SIMULATING Intel device at 0:%d:%d\n", deviceNumber, functionNumber));
-                bytesRead = sizeof(PCI_COMMON_CONFIG); // Simulate a successful read for the whole structure
+                bytesRead = sizeof(PCI_COMMON_CONFIG);
             }
             else if (busNumber == 0 && deviceNumber == 3 && functionNumber == 0) {
                 pciConfig.VendorID = PCI_VENDOR_ID_AMD;
-                pciConfig.DeviceID = 0x5678; // Example Device ID
-                pciConfig.HeaderType = 0x00; // Simulate Type 0, single function
+                pciConfig.DeviceID = 0x5678;
+                pciConfig.HeaderType = 0x00;
                 KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: SIMULATING AMD device at 0:%d:%d\n", deviceNumber, functionNumber));
-                bytesRead = sizeof(PCI_COMMON_CONFIG); // Simulate a successful read
-            }
-            else {
-                // For all other slots in this simulation, act as if no device is present
-                // or GetBusData returned nothing.
-                bytesRead = 0; // Simulate no device or failed read
-                pciConfig.VendorID = PCI_INVALID_VENDORID; // Ensure VendorID reflects no device
+                bytesRead = sizeof(PCI_COMMON_CONFIG);
             }
             // ** END SIMULATION / TESTING HOOK **
 
-
-            // If no data was read OR VendorID is 0xFFFF, it means no device is present at that slot/function.
-            if (bytesRead == 0 || pciConfig.VendorID == PCI_INVALID_VENDORID) { // Corrected check
+            if (bytesRead == 0 || pciConfig.VendorID == PCI_INVALID_VENDORID) {
                 if (functionNumber == 0) {
-                    // Optimization: if function 0 of a device does not exist,
-                    // then no other functions for that device number exist.
-                    break; // Break from functions loop, continue to next deviceNumber
+                    break;
                 }
-                continue; // Continue to the next functionNumber
+                continue;
             }
 
-            // Check if it's an Intel or AMD device
             if (pciConfig.VendorID == PCI_VENDOR_ID_INTEL ||
                 pciConfig.VendorID == PCI_VENDOR_ID_AMD ||
                 pciConfig.VendorID == PCI_VENDOR_ID_ATI_AMD)
@@ -294,49 +252,16 @@ MyPciScannerScanBus0AndPrint(
                 KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
                     "  VendorID: 0x%04X, DeviceID: 0x%04X\n",
                     pciConfig.VendorID, pciConfig.DeviceID));
-                // You could print more info from pciConfig here, e.g., pciConfig.HeaderType, pciConfig.ClassCode, etc.
             }
 
-            // If it's not a multi-function device (check HeaderType bit 7),
-            // we don't need to check functions 1-7 for this deviceNumber.
-            // The PCI_COMMON_CONFIG contains HeaderType. Bit 7 (0x80) indicates multi-function.
-            // This check should also be after a successful GetBusData.
             if (functionNumber == 0 && !(pciConfig.HeaderType & 0x80)) {
-                break; // Break from functions loop, continue to next deviceNumber
+                break;
             }
-        } // End of functions loop
-    } // End of devices loop
+        }
+    }
 
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: PCI Bus %d scan complete.\n", busNumber));
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: MyPciScannerScanBus0AndPrint - OUT\n"));
     return status;
 }
 
-VOID
-EvtDriverUnload(
-    _In_ WDFDRIVER Driver
-)
-{
-    PDRIVER_CONTEXT driverContext = NULL;
-
-    PAGED_CODE(); // EvtDriverUnload is called at IRQL = PASSIVE_LEVEL
-
-    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtDriverUnload - IN\n"));
-
-    driverContext = WdfGetDriverContext(Driver);
-
-    if (driverContext != NULL && driverContext->ControlDevice != NULL) {
-        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtDriverUnload - Explicitly deleting control device (Handle: %p).\n", driverContext->ControlDevice));
-        WdfObjectDelete(driverContext->ControlDevice);
-        driverContext->ControlDevice = NULL; // Good practice to NULL the handle after deleting
-    }
-    else {
-        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyPciScannerDriver: EvtDriverUnload - ControlDevice handle in context is NULL or context itself is NULL.\n"));
-    }
-
-    // WDF will automatically clean up the WDFDRIVER object itself after this function returns.
-    // No need to call WdfObjectDelete(Driver);
-
-    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: EvtDriverUnload - OUT\n"));
-    // No explicit return needed for VOID function
-}
