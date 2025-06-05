@@ -10,4 +10,58 @@ bin/
 obj/
 *.log
 *.cache
+*.pdb# ─── Visual Studio / JetBrains ───────────────────────────────────────────
+.vs/
+.idea/
+*.user
+*.suo
+*.vcxproj.user
+*.VC.db
+*.VC.VC.opendb
+*.etag
+ipch/
+.vscode/
+
+# ─── Build artifacts ─────────────────────────────────────────────────────
+bin/
+obj/
+[Bb]uild*/
+Debug*/
+Release*/
+*.log
+*.cache
+*.lastbuildstate
+*.ilk
+*.tlog/
+*.dmp
+
+# ─── Driver output ───────────────────────────────────────────────────────
 *.pdb
+*.sys
+*.cat
+*.cab
+*.msi
+
+# ─── Auth / Signing ──────────────────────────────────────────────────────
+*.pfx
+*.pvk
+*.snk
+*.cer
+
+# ─── NuGet / Package manager ─────────────────────────────────────────────
+packages/
+*.nupkg
+*.nuspec
+*.psmdcp
+*.vshost.*
+project.lock.json
+
+# ─── Misc. ───────────────────────────────────────────────────────────────
+*.orig
+*.htm
+*.tmp
+*.bak
+*.swp
+*.DS_Store
+Thumbs.db
+
