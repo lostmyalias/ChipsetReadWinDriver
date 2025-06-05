@@ -127,6 +127,9 @@ DriverEntry(
     }
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: I/O Queue created successfully.\n"));
 
+    WdfControlFinishInitializing(hControlDevice);
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: Control device initialization finished.\n"));
+
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyPciScannerDriver: DriverEntry - Control Device Setup Complete - OUT\n"));
     return status; // STATUS_SUCCESS from WdfDriverCreate if everything else succeeded
 }
